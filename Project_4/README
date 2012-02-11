@@ -1,0 +1,859 @@
+Title:  Writeup for Project 4, Fall 2011 for CSCI 402(Operating Systems)
+
+
+ Date:  11/24/11
+
+ Group Num 3 : 		Name         			Email         		  		Student ID
+
+			Achintya Singhal                achintya@usc.edu            		4414-3387-71
+			Jaspreet Singh	  	    	jaspreet@usc.edu		 	7464-2592-81
+       	    		Sumit Wattal          	        wattal@usc.edu            		7555-9290-28
+
+
+I. Requirements
+
+	Part 1 
+	-------
+	The Movie Theater Simulation
+	
+	We are to implement all the entities from the project Movie Theater Simulation. We are to do this such that all the servers work together across Nachos clients. It is the server's responsibility to connect the various entities together. User programs are not to know anything about the fact that remote procedure calls are being used. In addition, Nachos clients do not directly talk to each other. All client messages are to go to a Nachos server. The server connects the clients - and the user programs. We need to use the Exec system call to create each entity. The Fork system call is not to be used.
+	
+	For this part we only have 1 server, like project 3 part 3.
+
+	Each instance of Nachos that is running user programs is to now be able to run up to 10 user programs simultaneously. We assign mailbox numbers to threads as they are created. Mailbox numbers can no longer be hardcoded.
+		
+	Part 2 
+	-------
+	Distributed Servers
+	
+	We are to change our server code so that we can have up to 5 servers working together in a group. Each server can receive a request from any client. The client Nachos kernels are to randomly generate a server machine ID for each request message they send.
+	Each of our servers will have their own lock, CV, and monitor variable table. Servers are to only store the locks/CVs/MVs that they create. This means that all the servers together will contain the entire lock/CV/MV state for the simulation. No server will have the complete state of the simulation all by itself.
+
+	The simulation is to work with any number of servers from 1 to 5.	
+
+	Part 3  
+	-------
+	Extra Credit Part
+	
+	This does not require the Movie Theater. We need to implement an algorithm to determine which user program should receive ownership of a lock when the user program that had the lock has failed (terminated with a Control-C, or Exit system call, from the command line).
+	We are to have from 2 to 5 user programs. They can be single-threaded, one per client Nachos instance. The servers are to detect when a user program, that owns a lock, has died. A postOffice->Send() to a dead Nachos returns a value or false. Once the determination has been made, the server is to give the lock to the first waiting thread, or make the lock available if no thread is waiting.	
+
+II. Assumptions
+	
+	-- For memory usage we go back to what we used in Project2 (not TLB-based memory). We have set NumPhysPages to be 20000.
+	-- Number of mailboxes per nachos instance has been increased to 55
+	-- We can exec a total of 50 processes
+	-- The CVs, locks and MVs names can only contain alphanumeric data and cannot be more than 14 characters in length.
+	-- Once a request for  deletion of a lock, CV or MV is given to the server by any of the client user programs, 
+	the server will not queue up any new requests for AcquireLock, WaitCV or GetMV or SetMV respectively
+	
+	-- For movie simulations, we assume each customer group has 5 customers.
+	-- The DestroyCV and DestroyLock requests ensure that no new WaitCV and AcquireLock requests will be serviced,
+	respectively.
+	-- We can only create 550 each of distributed Locks, CVs and MVs on a single server. If attempts to do more
+	that are send the server simply responds to clients as saying that it was abad request.
+	-- A server can handle a total of 1500 requests in its lifetime.
+	-- If a server runs out of entities, we do not check to send in another request to know if some other server 
+	might have space
+	
+III. Design
+
+	Part1 :
+	-------
+	Movie simulation on a single server.
+	
+	Here we have a single movie simulation working using a single server. The simulation has 30 customers, 3 ticket
+	clerks, 3 concession clerks, 3 ticket takers, 1 manager and 1 movie technician, so as two movies are played.
+	
+	The entities are all spawned by using the Exec system call.
+
+	Part 2
+	---------------
+	Distributed System Calls
+	
+	Here we have distributed the locks, CVs and MVs across multiple servers. So, in order to accomplish client's
+	request for these resources - we have three different threads at server ends. 
+	
+	Thread 1: Client-Server thread
+	
+		This thread handles the request messages being delivered from client to server. The server listens for request from
+		the client at this thread. 
+		When a new request is received at server end for lock_creation/lock_acquire/lock_release/cv_creation/mv_creation/
+		mv_set/mv_get the server initially checks for those entities in its own information table. If found it simply responds
+		to that request using tis thread. 
+		If not, then the other two threads come into use by the server. 
+		It then responds to the client's request - sending it the necessary reponse through this thread.
+		
+	Thread 2: Server-Server thread (for Sending)
+		
+		This thread is being used by the server to check at other servers if and when request for some resource comes in. This
+		is because each server is only storing information on locks and CVs being maintained by them. 
+		
+		So when the entitites are not the requested server's own, it uses this thread to ping other server with a do-you-have
+		(DYH) message. These DYH messages are sent through this thread. Based on the responses to these  
+		messages the response to the clients are being sent.
+
+
+	Thread 3: Server-Server thread (for Recieving)
+	
+		A server receives the answer to its request on this thread and then it can decide what to do with 
+		the client request. 
+		
+	
+	Flow for different requests:
+	
+		
+	Handling of create messages: Ordering amongst DYH message
+	
+		A timsetamp is added to the create messages. These messages are now processed in timestamp order. 
+		
+		We have a stored queue of messages that need to be responded to. We store timestamp and group member
+		
+		We store the last timestamp recieved from each group number. Only the last timestamp need be saved.
+		That particular group member cant send a new msg with a timestamp equal to or less than that.
+		
+		When a server receives a create message, it checks if it has a create request for the same parameter name. If there
+		is no such request it gives an ok signal back to the requesting server. If it has any such request it comapares the timestamp
+		of its request against the timestamp extracted from the server request. if its imestamp is lesser, it sends "I have the parameter"
+		message to the requesting server else it agains sends an ok message back to the requesting server.
+
+        	If the timestamps are equal, then the server with a lower machine id will get preference in creation.
+		
+		
+
+		-- We do not check if the lock is acquired when wait is called on a CV.  
+		
+	
+	We define new classes ServerLock, ServerCondition and MonitorVariable in the synch.h file. We use them in the Server.cc
+	file in network directory to implement them. 
+	To begin we call the function RunServer in our  main.cc file  if arguments -m 0 were passed to the nachos instance. This 
+	runs that instance as server. The server instance simply checks for each request type and addresses them:
+		
+		--Creation of Locks,CVs and/or MVs : Name of entity is passed as argument
+		
+		This basically redirects the request to a FindLocks/FindCV/FindMV depending on the request. We first check if lock/CV/MV for same name has already been created. If so, we just retun its id to the user program.
+		Next we look for a new lock number to be found - we use a Bitmap for that. A new number is generated and that is sent as
+		number for Lock/CV/MV back to client instance. This number lies between 0 and 249. If no lock is available - all 250 have been 
+		made we print message showing exhaustion ofr locks/CV/MV
+		
+		-- Acquiring Locks : A number is given as argument
+		We first check is it the given lock number lock number is a valid one - ie, it lies between 0 and 250. If not, we tell
+		client that it is a badLock number. If it is valid, we will go and check if there is a pending delete request. If so,
+		we simply ignore this request - as per our assumption given in Section II of write-up. Otherwise the requesting client
+		has the lock. We increement counter for lock usage.
+		
+		
+		-- Releasing Locks : A number is given as argument
+		Here also, we first check is it the given lock number lock number is a valid one - ie, it lies between 0 and 250. If so, we check if that client had earlier sent request for creation or not. If 
+		not, we tell client that it is a badLock number. If it is valid, we will let go of the lock. Also, if we have a 
+		pending acquire request on that lock - we give lock to that client. If not, we reclaim this lock number And if there 
+		is a pending delete request. If so, we simply delete lock at end  of this release. We decrement counter for lock usage.
+		
+		-- Destroying Locks : A lockid is given as argument
+		Here also, we first check is it the given lock number lock number is a valid one - ie, it lies between 0 and 250. If so, we check if that client had earlier sent request for creation or not. If 
+		not, we tell client that it is a badLock number. If it is valid, we will next check the lock usage counter. If it is 
+		zero we can go ahead and destroy lock. If it is non-zero we set flag signfying this lock shall be deleted. 
+		
+		-- WaitCV: has two arguments - A lockid and a cvid 
+		We validate the given lockid and cvids. They must both be valid numbers between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. If there has been delete called on CV we cant continue. FOr every
+		waitcall we increment in use counter. The client goes to sleep now.
+		
+		-- SignalCV: has two arguments - A lockid and a cvid 
+		We validate the given lockid and cvids. They must both be valid numbers between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not.  For every signal call we decrement in use counter. If there is a 
+		pending delete request we address the request. 
+		
+		-- DestroyCV: A cvid given as argument
+		We validate the given cvid. It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. Otherwise, we send error to client. If so, we check if 
+		someone is waiting - if yes then we set flag signifying to be deleted. Otherwise, we just delete it.
+		
+		-- SetMV - has two arguments - a MV id number and a number which is to be set as value
+		We validate given mvid.  It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. If not so  then we send BadMV error to client. If so, we just
+		set the value of that MV as the given number. 
+		
+		-- GetMV - a MV id number is argument
+		We validate given mvid.  It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. If not so  then we send BadMV error to client. If so, we just
+		set return the value of that MV. 
+
+		-- DestroyMV: A MV id given as argument
+		We validate the given mvid. It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. Otherwise, we send BadMV error to client. If so, we delete the MV.
+
+			
+	Movie simulation on morethan one server:
+	
+		Here we have a movie simulation working using a multiple servers. The simulation has 10 customers, 1 ticket
+		clerk, 1 concession clerk, 1 ticket taker, 1 manager and 1 movie technician.
+	
+		The entities are all spawned by using the Exec system call.
+
+	
+		Part 3 - Extra credit
+		----------------------
+		
+		The objective here is to check at all times if any lock owner is dead:
+		
+		We accomplish that by starting a different thread in both server and client programs that shall using postOffice ->
+		Send to figure if a client is dead.
+		
+		On server side: A new thread (4th thread is server)
+		
+		--We have started a new thread which uses Timer class to call a function repeatedly. In this function we have the logic
+		to ping the client on its spearate defined mailbox - this mailbox is different from the one used by client to send 
+		request to Server and listen to responses to its requests.
+		
+		
+		--Once the ping timer calls the funtion, the function checks if last check time was more than 5 seconds ago. If so, it
+		goes on to check the list of created locks by that server.
+				--- This is being done by checking through our requestors control block data structure. Whenever a new
+					request comes in, the information is stored along with the requestor's mailbox and network id. When a new
+					lock comes is created the owner info is fed in and also when an existing one os given to new client,
+					that client's info is also stored
+					
+
+		It then pings the lock's current owner to figure out if the lock owner is still alive or not. If not, it goes ahead to release the lock. If there was a client waiting on 
+		that lock then that gets a message that it has been given the lock and distributed programs run along.
+		
+		On client side:
+		
+		A new thread is spawned everytime a new user program is setup and all this does is recieves prings from Server if and
+		when it sends them. When a client dies, there is no one to receive this ping and the server gets to know its dead. 
+		
+	
+		Once a dead client has been zoomed in on, we go ahead and forcibly release the lock. If anyone is waiting 
+		they get the lock and go ahead with it. Otherwise lock is freed. Requisite response, if needed, is sent to new lock owner.
+		
+		
+		
+IV. Implementation
+
+	+ Files added:
+	
+		in /network directory
+		
+		-- Server.cc
+		-- Request.cc
+		-- Request.h
+		
+		in /test directory
+		
+		--  DistCVTest1_1.c 
+		--  DistCVTest1_2.c
+		--  DistCVTest2_1.c
+		--  DistCVTest2_2.c
+		--  DistCVTest2_3.c
+		--  DistCVTest3_1.c
+		--  DistCVTest3_2.c
+		--  DistCVTest3_3.c
+		--  DistCVTest3_4.c
+		--  DistCVTest3_5.c
+		--  DistCVTest4_1.c
+		--  DistCVTest4_2.c
+		--  DistCVTest4_3.c
+		--  DistCVTest5_1.c
+		--  DistCVTest5_2.c
+		--  DistCVTest5_3.c
+		--  DistLockTest6_1.c
+		--  DistLockTest6_2.c
+		--  DistLockTest6_3.c
+		--  DistCVTest7_1.c
+		--  DistCVTest7_2.c
+		--  DistCVTest7_3.c
+		--  DistMVTest8_1.c
+		--  DistMVTest8_2.c
+		--  DistMVTest8_3.c
+		--  DistCVTest9_1.c
+		--  DistCVTest9_2.c
+		-- ClientFailTest1_1.c
+		-- ClientFailTest1_2.c
+		-- ClientFailTest2_1.c
+		-- ClientFailTest2_2.c
+		-- ClientFailTest3_1.c
+		-- ClientFailTest3_2.c
+		-- ClientFailTest3_3.c
+		-- mv.c
+		-- mv_1_1.c
+		-- mv_1_2.c
+		-- mv_1_3.c
+		-- cust.c
+		-- tt.c
+		-- tc.c
+		-- cc.c
+		-- mt.c
+		-- man.c
+		
+		
+	+ Files Modified:
+	
+		
+		in /userprog directory
+	
+		-- addrspace.h / addrspace.cc
+		-- Process.h / Process.cc
+		-- exception.cc / syscall.h
+		-- progtest.cc
+		
+		in /threads directory
+		
+		-- thread.cc / thread.h
+		-- synch.h / synch.cc
+		-- main.cc 
+		-- system.cc / system.h
+		
+		in /test directory
+		
+		-- Makefile
+
+		in /network directory
+
+		-- Network.cc
+		-- Request.h , Request.cc
+		
+		in /code directory
+		-- Makefile.common
+		
+		
+		
+    + Data Structures Added
+	
+		--in network/Request.h, Request.cc			
+		
+		class Request
+		{
+			public:
+				int responseCount;
+				char clientRequest[40];
+				List *queuedList;
+				bool isPending;
+				bool isCompleted;
+				int negResponse;
+				long timestamp;
+				Response *response;
+				Response *owner;
+				
+				Request(int,int);
+				~Request();
+			
+		};
+				
+		-- in network/Network.cc
+		
+			typedef struct _RequestsTracker
+			{
+				int createdLockID[LOCK_SIZE]; //list of lock id create by this server
+				PacketHeader requestPacketHeader[LOCK_SIZE];//associated locks were created due to request by this client - mailbox id
+				MailHeader requestMailHeader[LOCK_SIZE];//associated locks were created due to request by this client - network id
+				int countLocksCreated;
+				int forciblyReleasedLockID[LOCK_SIZE];
+			} RequestorsControlBlock;
+					
+					
+	+ Data Structures modified
+
+		-- in synch.h, synch.cc
+		
+			class ServerLock
+			class ServerCondition
+			
+		
+	
+	+ Functions Added
+	
+		-- in /threads/synch.cc , synch.h
+		
+			int ServerLock :: getOwnerNetworkID()
+
+			int ServerLock :: getOwnerMailBoxID()
+	
+		-- in /network/Request.cc, Request.h
+			
+			Request :: Request(int netID, int mailboxID)
+
+		-- in network/Server.cc
+		
+		void Timer_PingClients(int dummy)
+		void ServerReceive(int i)
+		void ServerSend(int i)
+		void Ping_Clients()
+
+		void InitializeServers()
+		void initializeReqCb()
+		int FindPendingRequest()
+		void Dispatch(PacketHeader outPktHdr, MailHeader outMailHdr, char *msg)
+		void BroadcastToServers(char *msg)
+		void HandleCreateRequest(int status,int msgID)
+		int MatchRequest(char *request)
+		long SearchRequestTable(char *msgType, char* paramName)
+
+
+		-- in /userprog/progtest.cc
+		
+		void Respond_Server()
+
+			
+	+ Functions Modified
+	
+		-- in /network/Server.cc
+		
+			void CreateLock(char *name, PacketHeader pktHdr, MailHeader mailHdr, int msgID)
+			void CreateMonitor(char *name, PacketHeader pktHdr, MailHeader mailHdr, int msgID)
+			void CreateCondition(char *name, PacketHeader pktHdr, MailHeader mailHdr, int msgID)
+
+
+			void LockAcquire(char *lockName, char *actualMsg,int networkID, int mailboxID)
+			void LockRelease(char *lockName, char *actualMsg,int networkID, int mailboxID, bool sendResponse)
+			void LockDestroy(char *lockName, char *actualMsg, int networkID, int mailboxID)
+			void ConditionWait(char *cvName, char *lockName, char *actualMsg, int networkID, int mailboxID)
+			void ConditionSignal(char *cvName, char *lockName, char *actualMsg, int networkID, int mailboxID)
+			void ConditionBroadcast(char *cvName, char *lockName, char *actualMsg, int networkID, int mailboxID)
+			void ConditionDestroy(char *cvName, char *actualMsg, int networkID, int mailboxID)
+			void MonitorGet(char *mvName, char *actualMsg, int networkID, int mailboxID)
+			void MonitorSet(char *mvName, int val, char *actualMsg, int networkID, int mailboxID)
+			void MonitorDestroy(char *mvName, char *actualMsg, int networkID, int mailboxID)
+	
+
+	
+V. Testing
+
+	To compile the tests:
+		Go to /code/bin directory and run command
+		
+		make all
+ 
+		and then go to /code/test directory and run command 
+		
+		make all	
+	
+	To run tests we are to specify total number of servers that are available to us using a -ns flag. We assume that
+	once a number is provided it is same for all servers and clients. We do not check separately if the number
+	of servers arent what they should be. If sufficient servers arent started, the code will not run correctly.
+	
+	Also, if multiple entities are given same network id's the code will not run correctly. We donot check if
+	that might be the case
+	
+	
+	Parts 1
+	-----------
+	1. Movie theatre simulation. 
+		It runs on single server. It has 30 customers, 3 ticket takers, 3 concession clerk, 3 ticket clerks and 1 movie technician and 1 manager.
+		
+		mv_1_1.c execs 10 customers, 1 ticket taker, 1 concession clerk, 1 ticket clerk and 1 movie technician and 1 manager.
+		mv_1_2.c execs 10 customers, 1 ticket taker, 1 concession clerk, 1 ticket clerk.
+		mv_1_3.c execs 10 customers, 1 ticket taker, 1 concession clerk, 1 ticket clerk.
+
+	To run this test -
+		The order of commands on different terminals that are to be used is as:
+		Go to the network directory and run:
+
+		nachos -m 0 -ns 1 -server -rs 2			(terminal 1)
+		nachos -m 1 -ns 1 -x ../test/mv_1_1 		(terminal 2)
+		nachos -m 2 -ns 1 -x ../test/mv_1_2		(terminal 3)
+		nachos -m 3 -ns 1 -x ../test/mv_1_3		(terminal 4)
+
+
+		Complete simulation would take around 20 minutes to complete.
+
+		+Test Output
+		
+		This test will show that 30 customers in groups are going in the movie theatre, buys tickets and food, have a seat, watch movie  		    and then come out of the theatre. 
+
+	
+	Part 2
+	------
+	
+	The -ns command is used to specify how many servers are to run. This must be given both at client
+	and server end. This must immediately follow the number of servers at command prompt.
+	
+	One point to note is that all the servers will occupy lower machine id's.e.g if ns = 2 the machine id's of servers will be 0 and 1; if ns is 3 then
+	machine ids of servers will be 0,1,2 and so on so forth.
+	
+	Inside our user program, if we attempt to input something other than a string to CreateLock and CreateCV - the code refuses to compile.
+	
+	We use ns to specify the number of servers (using the ns flag), it should be a number between 2 and 5. Random seed 
+	functionality is needed.
+	
+	2. We will be running upto 5 servers and two user programs as clients programs.
+		
+		To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the two client programs, open two more terminals for Aludra and run the two user programs one after another
+
+				nachos -m 5 -ns 5 -x ../test/DistCVTest1_1
+				nachos -m 6 -ns 5 -x ../test/DistCVTest1_2
+				
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock, CreateCV, WaitCV, SignalCV,
+		DestroyCV
+		
+		+Test Output
+		
+		This test will show that DistCVTest1_1 will wait for DistCVTest1_2 to signal it. Then DistCVTest1_2 will go on 
+		wait. After DistCVTest1_1 wakes, it will signal DistCVTest1_2 and wake it up.
+
+		
+	3. We will be running pto 5 servers and three user programs as clients programs.
+		
+		To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the two client programs, open two more terminals for Aludra and run the two user programs one after another
+
+				nachos -m 5 -ns 5 -x ../test/DistCVTest2_1
+				nachos -m 6 -ns 5 -x ../test/DistCVTest2_2
+				nachos -m 7 -ns 5 -x ../test/DistCVTest2_3
+
+				(The testfile DistCVTest2_2 is to be run once DistCVTest2_1 says "Client 1 to go on wait..." and the file DistCVTest2_3 is to be run once DistCVTest2_2 says "Client 2 to go on wait...")
+				
+
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock, CreateCV, WaitCV, SignalCV,
+		DestroyCV
+		
+		+Test Output
+		
+		Both DistCVTest2_1 and DistCVTest2_2 will go to sleep. And DistCVTest2_3 will broadcast and awake them both.
+		This shows BroadcastCV wakes up all of sleeping clients.
+		
+	4. We will be running upto 5 servers and five user programs as client programs.
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the client programs, open five more terminals for Aludra and run the user programs one after another
+
+				nachos -m 5 -ns 5 -x ../test/DistCVTest3_1
+				nachos -m 6 -ns 5 -x ../test/DistCVTest3_2
+				nachos -m 7 -ns 5 -x ../test/DistCVTest3_3	
+				nachos -m 8 -ns 5 -x ../test/DistCVTest3_4	
+				nachos -m 9 -ns 5 -x ../test/DistCVTest3_5	
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateMV, SetMV, GetMV
+	
+		+Test Output:
+		
+		DistCVTest3_1 creates a new MV and sets it to be 9 initially. The other four user programs are then run one 
+		after another and increase the MV one by one.  So finally, DistCVTest3_5 sets it to be = 9+(5-1) = 13.
+		
+
+	5. We will be running 2 servers and three user programs as client programs.
+	
+		To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the client programs, open three more terminals for Aludra and run the 3 user programs one after another
+
+				nachos -m 6 -ns 5 -x ../test/DistCVTest4_1 -d w
+				nachos -m 7 -ns 5 -x ../test/DistCVTest4_2 -d w
+				nachos -m 8 -ns 5 -x ../test/DistCVTest4_3 -d w
+
+				
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV,
+		DestroyCV
+	
+		+Test Output:
+		
+		DistCVTest4_1 goes on wait for CV 0 on lock_0.  DistCVTest4_2 signals it up and goes on wait for CV 1 on 
+		lock 0. DistCVTest4_3 signals it up and asks to destroy CV. Next it goes on wait but that isnt serviced as CV
+		has been destroyed. So statement prints and it exists.
+		
+	6. We will be running upto 5 servers and three user programs as client programs. 
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the client programs, open three more terminals for Aludra and run the user programs one after another
+
+				nachos -m 6 -ns 5 -x ../test/DistCVTest5_1 -d w			
+				nachos -m 7 -ns 5 -x ../test/DistCVTest5_2 -d w
+				nachos -m 8 -ns 5 -x ../test/DistCVTest5_3 -d w
+
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateMV, SetMV, GetMV, DestroyMV
+	
+		+Test Output:
+		
+		This is similar to test 3. However, before incrementing in DistCVTest5_2 we simply set/get/destroy the MV which is not created.  Now when we use GetMV/SetMV/DesMV
+		to obtain value we get an error saying BadMV and we are returned a -1 - signifying wrong input.
+		
+	7. 	We will be running upto 5 server and three user programs as client programs. 
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the client programs, open three more terminals for Aludra and run the user programs one after another
+
+				nachos -m 6 -ns 5 -x ../test/DistLockTest6_1 -d w
+				nachos -m 7 -ns 5 -x ../test/DistLockTest6_2 -d w				
+				nachos -m 8 -ns 5 -x ../test/DistLockTest6_3 -d w	
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock
+	
+		+Test Output:
+		
+		Here we create a lock in both of DistLockTest6_1, DistLockTest6_2 and destroy the second one at end of 
+		DistLockTest6_2. In DistLockTest6_3 we attempt to acquire and release both of these. However, attempts to 
+		acquire deleted lock throws error. The client gets an error msg stipulating badLock. 
+		
+	8. 	We will be running upto 5 servers and three user programs as client programs. 
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+				
+			For the client programs, open three more terminals for Aludra and run the user programs one after another (e till previous program is stuck)
+
+				nachos -m 6 -ns 5 -x ../test/DistCVTest7_1 -d w
+				nachos -m 7 -ns 5 -x ../test/DistCVTest7_2 -d w			
+				nachos -m 8 -ns 5 -x ../test/DistCVTest7_3 -d w
+
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock, DestroyCV
+	
+		+Test Output:
+		
+		Here we create a lock and a CV in DistCVTest7_1. That program goes on wait and is signalled by
+		DistCVTest7_2. It wakes and completes and DistCVTest7_2 goes on wait. DistCVTest7_3 then wakes 
+		DistCVTest7_2. It destroys CV and attempts to go on wait but that does not happen as CV has been destroyed.
+		So statement prints.
+			
+	9. We will be running upto 5 servers and three user programs as client programs.
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the client programs, open three more terminals for Aludra and run the user programs one after another
+
+				nachos -m 6 -ns 5 -x ../test/DistMVTest8_1
+				nachos -m 7 -ns 5 -x ../test/DistMVTest8_2
+				nachos -m 8 -ns 5 -x ../test/DistMVTest8_3	
+		
+		If the number of servers is more than 3 it can take about 10-15 minutes to run this test.
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateMV, SetMV, GetMV, CreateCV. 
+		WaitCV, SignalCV
+	
+		+Test Output:
+		
+		DistMVTest8_1 creates two monitor variables. The first one is initialized to 500 and the other to 11. The 
+		first one is then modified in the other two Test files in loops, both of whom run 500 times. The loop in 
+		DistMVTest8_2 increases it value by 3 everytime and the one in DistMVTest8_3 by 7 everytime. We use locks 
+		and CVs to implement no race condition. The file DistMVTest8_2 increases the value first and seqenced to make
+		sure that so is always the case for each loop. At end of combined 1000 iterations the 1st monitor variable is
+		now 500 + 500*3 + 500*7 = 5500 (seen in client 3). This test shows stability of our monitor variable.
+		The second MV is there so that once the second test is complete, the first test no longer goes to Wait CV. 
+		
+		
+	10. We will be running upto 5 servers and two user programs as client programs to do these negative tests.
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -server -rs 23
+					nachos -m 1 -ns 5 -server -rs 514
+					nachos -m 2 -ns 5 -server -rs 1419
+					nachos -m 3 -ns 5 -server -rs 981
+					nachos -m 4 -ns 5 -server -rs 21
+					
+			For the client programs, open three more terminals for Aludra and run the second user program after the first one
+			runs to completion
+
+				nachos -m 6 -ns 5 -x ../test/DistCVTest9_1 -d w
+				nachos -m 7 -ns 5 -x ../test/DistCVTest9_2 -d w
+				
+		
+		Syscalls covered in this test - CreateLock, CreateMV, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV, 
+		DestroyCV, DestroyLock, DestroyMV
+	
+		+Test Output:
+		
+		This test shows that even if our client programs are creating same resources again and again - the code 
+		remains stable. And also, when we try yo delete non-existent locks, Cvs or MVs - nachos doesnt crash. 
+		We make 250 locks cvs and mvs. When we try to create more, we get an error.
+		Also, in these tests we attempt to acquire, release and destroy locks whose values are not in specified range
+		0 to 250. We are aso giving invalid input to WaitCV, SignalCV, BroadCastCV, DestroyCV and DestroyMV commands.
+		The program holds well - and clients get BadCV, BadLock and BadMV errors.
+		
+		This is a stress test, showing a large many entities can be made and also shows the randomness of our
+		messages from client to server -- the messages go randomly from Server to some client.
+			
+		
+	11. Movie simulation with multiple servers
+
+		It has 10 customers, 1 ticket takers, 1 concession clerk, 1 ticket clerks and 1 movie technician and 1 manager.
+		The movie theatre simulation is run as a distributed system with morethan one server.
+
+		mv.c execs 10 customers, 1 ticket taker, 1 concession clerk, 1 ticket clerk and 1 movie technician and 1 manager.
+
+	To run this test -
+
+		The order of commands on different terminals that are to be used is as:
+		Go to the network directory and run:
+		nachos -m 0 -ns 2 -server -rs 2			(terminal 1)
+		nachos -m 1 -ns 2 -server -rs 2			(terminal 2)
+		nachos -m 2 -ns 2 -x ../test/mv			(terminal 3)
+
+		Complete simulation would take around 20 mins to complete.
+		Syscalls covered in this test - CreateLock, CreateMV, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV, 
+		DestroyCV, DestroyLock, DestroyMV
+
+		+Test Output
+		
+		This test will show that 10 customers in groups are going in the movie theatre, buys tickets and food, have a seat, watch movie  		    and then come out of the theatre. 
+
+	Part 3 
+	-----------
+	Extra Credit	
+		
+	12. We will be running upto 5 servers and two user programs as client programs to do these negative tests.
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -e -server -rs 23
+					nachos -m 1 -ns 5 -e -server -rs 514
+					nachos -m 2 -ns 5 -e -server -rs 1419
+					nachos -m 3 -ns 5 -e -server -rs 981
+					nachos -m 4 -ns 5 -e -server -rs 21
+					
+			For the client programs, open three more terminals for Aludra and run the second user program after the first one
+			runs to completion
+
+				nachos -m 6 -ns 5 -e -x ../test/ClientFailTest1_1 -rs 33
+				nachos -m 7 -ns 5 -e -x ../test/ClientFailTest1_2 -rs 59
+				
+		
+		Syscalls covered in this test - CreateLock, CreateMV, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV, 
+		DestroyCV, DestroyLock, DestroyMV
+	
+		+Test Output:
+		
+		This test shows that once a lock owner is dead, the lock's ownership is passed to the waiting client.    
+		
+		In this test the client 1 gets lock and then is killed. The lock is forcibly freed for client 2 to get.
+
+		
+	13. We will be running upto 5 servers and two user programs as client programs.
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -e -server -rs 23
+					nachos -m 1 -ns 5 -e -server -rs 514
+					nachos -m 2 -ns 5 -e -server -rs 1419
+					nachos -m 3 -ns 5 -e -server -rs 981
+					nachos -m 4 -ns 5 -e -server -rs 21
+					
+			For the client programs, open three more terminals for Aludra and run the second user program after the first one
+			runs to completion
+
+				nachos -m 6 -ns 5 -e -x ../test/ClientFailTest2_1 -rs 88
+				nachos -m 7 -ns 5 -e -x ../test/ClientFailTest2_2 -rs 33
+				
+		
+		Syscalls covered in this test - CreateLock, CreateMV, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV, 
+		DestroyCV, DestroyLock, DestroyMV
+	
+		+Test Output:
+		
+		This test shows that once a lock owner is dead, the lock's ownership is freed.    
+		
+		Client 1 terminates with the lock's ownership. The client 2 is now started and gets the lock. Then client 4 is to
+		
+
+	14. We will be running upto 5 servers and two user programs as client programs
+
+	To run this test -
+			Go to the network directory and run upto 5 servers:
+					nachos -m 0 -ns 5 -e -server -rs 23
+					nachos -m 1 -ns 5 -e -server -rs 514
+					nachos -m 2 -ns 5 -e -server -rs 1419
+					nachos -m 3 -ns 5 -e -server -rs 981
+					nachos -m 4 -ns 5 -e -server -rs 21
+					
+			For the client programs, open five more terminals for Aludra and run the seond user program after 
+			a print for starting Client 2. Then kill CLient using Ctrl+C when print for that appears.
+			Client 3 is to be begun once client 2 is run to completion. Then client 4 is to be started and client 3
+			is to be killed similar to clients 2 and 1 respectively. Then client is to go on a wait and a new client 5
+			is to be started that shall signal it.
+
+				nachos -m 6 -ns 5 -e -x ../test/ClientFailTest3_1 -rs 77
+				nachos -m 7 -ns 5 -e -x ../test/ClientFailTest3_2 -rs 65
+				nachos -m 8 -ns 5 -e -x ../test/ClientFailTest3_3 -rs 53
+				nachos -m 9 -ns 5 -e -x ../test/ClientFailTest3_4 -rs 34
+				nachos -m 10 -ns 5 -e -x ../test/ClientFailTest3_5 -rs 90
+		
+		Syscalls covered in this test - CreateLock, CreateMV, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV, 
+		DestroyCV, DestroyLock, DestroyMV
+	
+		+Test Output:
+		
+		This test shows both of the above conditions - that once a lock owner is dead, the lock's ownership is freed if no
+		one's waiting or awarded to waiter if there are any. 
+		
+		In this test the client 1 gets lock and then is killed. The lock is forcibly freed for client 2 to get.
+
+		Then client terminates with the lock. The client 3 is now started and gets the lock. Then client 4 is to
+		be started and client 3 killed off. Once client 4 gets lock, it gets on wait for it. The client 5 is 
+		started and signals it after acquiring lock
+		
+	
+
+		
+VI. Discussion:
+
+            + Experiment expectation.  
+				We expect that all the test cases run correctly - for each of Parts 1,2 and 3.
+
+            + Experiment result.  
+				The output of test cases are all as per expectations.
+
+            + Explanation
+				Distributed system has been correctly setup.
+				
+				The movie theater simulation has been successfully transformed from the user program in Project 2 and can run
+				as a Distributed system for our Project 4 using distributed system calls and a multi server system.
+				
+				The failsafe logic for extra credit part has been implemented correctly.
+				
+VII. Miscellaneous:
+
+	N/A
