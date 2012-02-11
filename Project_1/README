@@ -1,0 +1,661 @@
+Title:  Writeup for Assignment 1, Fall 2011
+
+Date:  09/18/11
+
+ Group Num 3 - 6 : 		Name          			  	Email         				  			Student ID
+
+				  Achintya Singhal          		achintya@usc.edu        		     		4414-3387-71
+
+			  	  Jaspreet Singh          		jaspreet@usc.edu        	  	    		7464-2592-81
+
+			  	  Kai Wen		       		kaiwen@usc.edu			             		4228-5794-57
+
+				
+I. Requirements:
+
+Part 1 Of The Project
+----------------------
+The Part 1 of the project requires us to implement locks and condition variables. The public interface to them was provided in synch.h. We were required to define the private data and implement the interface.
+
++ Requirements for locks are as follows: 
+	- While a thread is in the segment of the code to acquire, or release, a lock - it should be ensured that it is an atomic execution
+	- No thread that owns the lock already can re-acquire it. We would need to store the owner of the lock in the class to be able to check if the lock is owned by current thread
+	- Only a lock that owns the lock can release it, otherwise it should be reported as an error
+	- If a thread currently owns a lock, no other thread can acquire it. They should be added to a waiting queue associated with the lock. If that queue is empty, the lock is set as free
+	- If a thread is releasing the lock, then the first thread in the wait queue for the lock automatically gets the lock
+
++ Requirements for condition variables (CVs) are as follows: 
+	- A CV always has a condition lock associated with it's wait and signal operations and a queue is mantained to keep track of threads looking to execute
+	- When we go into a wait for a CV, then the associated lock need to be released before the thread goes to sleep
+	- When signal function is called with a lock, then we need to check if any thread is waiting with that condition lock. The first thread in queue is to be woken from sleep and it automatically acquires the lock in quesiton. It is then added to the ready queue. Only one thread is woken up from the Signal function, while Broadcast function awakes all the threads who were waiting on that lock
+	- If the Waiting Queue for a CV (with specific lock) is empty, then calling Signal function for that thread shows an error message
+
+Part 2 of the Project
+----------------------
+The part 2 of the project requires us to implement a Theater simulation system. In the simulation, we need to include a movie room, customers, ticket clerks, concession clerks, ticket takers, movie technicians and a manager.
+Requirements for each subject in the simulation
+        - The movie room should have 5 rows and 5 seats in each row. There is only one movie room in the theater.
+        - Customers always travel in groups. In each group, there is one member is responsible for buying tickets, food, and hand in tickets of the group to the ticket takers. When the customers are getting tickets or food, they always choose the shortest line. One group can contain 1 to 5 customers. Groups want to sit together, so they will take consecutive seats in a row. If not enough seats are left in a row, a Customer group will take seats in consecutive rows. If this is not possible, then they will take any available seats in the theater. And the system need to track the specific seat which customers are using, and the system also need to make sure each customer only takes one seat.The customer groups must regroups after the movie finished, and each customer has 25% chance to go to restroom after a movie finished. If a movie has been started, the customer group must wait at lobby until the movie is over to get in the movie room. And each customer has their own decision about what kind of food they want to get. We should be able to handle at least 40 customers in our program.
+        - Ticket clerks are the people who sell movie tickets to customers. Ticket clerk is responsible for selling tickets and collecting money from the ticket buyer of the customer group. The ticket clerks can go on a break when the manager tell them to do it. We could have 1 to 5 clerks in our program.
+        - Concession clerks are responsible to sell food to customers. They can talk to customers to ask them what food they want, and then pass the food to customers and collect the payment. Concession clerks can go on a break when the manager tell them to. Our system should be able to handle 1 to 5 concession clerks
+        - Ticket takers is responsible to check tickets before a group of customers get in the movie room, and they also need to be responsible to tell the customer the movie has been started, so they need to wait in the lobby until the movie ends. Ticket takers also can go on a break if the manager tell them to do so. Our system should be able to take care of 1 to 3 ticket takers.
+        - Movie technician is responsible for starting a movie and ending a movie. The movie technician need to follow the manager's words to start a movie, and they need to tell the customer that a movie is over. When a movie started, the movie technician will stay inside the movie room until the movie is over.
+        - Manager is responsible for telling employees to go on a break and off a break, and the manager also tells the movie technician when to start a movie. The manager is also responsible to track all the customers inside the movie room. When all the customers of prior movie have left the movie room, the manager can start another movie. The manager also need to track the total money the theater has made. Our system need to print out the the income of each type clerks and the total. We only have 1 manager in our system.
+	
+II. Assumptions:
+
+Part 2 Of The Project
+----------------------
+		- The bathroom is assumed to have infinite capacity. Between a Thread->Yield() called for 5 to 15 cycles, everyone who went in would have done their business. We shall not be managing queues in the bathroom.
+		- Each customer group has $5,000 of money
+		- The concession clerk will never run out of popcorn and soda 
+		- The ticket clerk will never run out of tickets - new movie shows are to be arranged so that all customers see the movie
+		- The lobby has infinite capacity
+		- The system never has more than 1 manager, more than 1 movie room, more than 1 movie technician, more than 3 ticket takers, or more than 5 concession or ticket clerks. 
+
+III. Design:
+
+Part 1 of the Project
+----------------------
+The basic class structure was provided to us. Some new private variables were to be added to the classes of Lock and CV.
+
+	- For Lock, we added a thread pointer LockOwner to keep track of the lock owner, and defined a new enum LockStatus with FREE and BUSY and used in the Class to keep track if lock is free or unavailable. There is also a function, isOwnedByCurrentThread to check if current thread is the owner.	Also, a new List was needed to implement the queue of threads waiting for queue. 
+	
+	- For a CV, a new Lock waitingLock was created to keep track of the lock associated with the condition variable. And a queue was setup to keep track of the condition variables. 
+	
+The algorithm are as follows:
+	- For acquiring a lock: We initially check if threads are owned by the same thread. If not, we then se if is FREE and can be acquired.
+	- For releasing a lock: We have to see if the thread is owned by that lock that is trying to release it
+	
+	- For CV - Wait: This function allows a thread to go to sleep while waiting for a thread to complete its work in the critical section. This will enable synchronization. When a thread is to go on wait, a new queue for that CV, with Lock, is created and it is added to that list. If a list already exists, then it is simply added to the end of the queue.
+	- For CV - Signal: We see if the lock it is called on is the right one. If we manage to find a thread waiting for the CV, it shall be woken up - re-acquire that lock and be added to ready queue.
+
+Part 2 of the Project
+----------------------
+Since we used C to implement this project, so we used a lot of structures instead of classes. We only have 2 files for this project. One is the main.h file which contains all the structures and enums in it. And the other is the main.cc file which contains the main functions responds to each of the structure. Each main function is actually a thread of corresponding structures. 
+
+Also, in parts of this writeup, and in comments in our code, we have used CC to denote concession clerk, TC for ticket clerk, MT for movie technician, and TT for ticket taker.
+
++Ticket:
+ -Structure:
+  struct _Ticket //contains all the data we need for a ticket
+{
+	int roomNum;
+}Ticket;
+
++Seat:
+  -Structure
+   struct _Seat // The datas we need for a seat
+{
+	int roomNum;
+	CUST cust;
+	int isTaken;
+}Seat;
+ - Functions
+   SeatsTaken(int) //this function will return the available number of seats
+
++Movie Room
+  -Structure
+   struct _MvRoom // The only thing we need for a movie room is a 2D array for the seats
+{
+	Seat seat[MAX_ROWS][MAX_COLS];
+}MvRoom;
+
++Manager:
+  - Structure: 
+     struct _Manager
+	{
+		Thread *selfThread;
+		Location location;
+		State state;
+		Msg msgToAll;
+		unsigned int money;
+	}Manager;
+   - Functions
+    startManThread() // used to start the thread of manager
+  - Main function
+    void manMain(int selfId) // this is the main function for manager
+
++Customer:
+  - Structure:
+    struct _Cust //contains all the data a customer needs
+{
+	int selfId;
+	int grpId;
+        Thread *selfThread;
+	Location location;
+	State state;
+	unsigned int money;
+	Seat *seat;
+	int seatTaken;
+	int takeSoda;
+	int IAMTicketBuyer;
+	int takePopcorn;
+	int goBathroom;
+	int msgBuffer;
+	mtQueue *queue;
+}Cust;
+
+    struct _CustGrp // an individual structure for customer group contains the customer as a data
+{
+	Cust *cust[MAX_CUST];
+        int grpId;
+	Location location;
+	State state;
+	Cust *tBuyer;
+	Ticket *ticket[MAX_CUST];
+	Food *food;
+        int numCust;
+}CustGrp;
+
+  - Functions
+   getCustState(int,int,int) // get current customer's state
+   changeCustState(int,int,int, State) // get the state of customers based on the running thread
+   getCustGrpState(int,int) // get customer group's current state
+   changeCustGrpState(int,int,State) // change the customer group's state based on the running thread
+   changeCustLocation(int, int, int, Location) // change customer's location
+   changeCustGrpLocation(int, int, Location) // change customer group's location
+   getCustGrpLocation(int,int) //get customer groups current location
+   getCustLocation(int,int,int) // get the current location of the customer
+   initializeQueue(int, mtQueue*) // initialize the queue so there is no any customer in the customer group
+   queueAddCust(int,mtQueue*, Cust) // add a customer into a customer group
+   queueRemoveCust(int, mtQueue*) // remove a customer from the queue
+   getTotalCustCount(int, mtQueue* queue) // get the total number of people of a customer group
+   getNumOfTicketTaken() // return the number of tickets
+   transferMoneyFromCustToCc(int, Cust* , int) //pass the money from customer to concession clerk
+   transferMoneyFromCustToTc(int, Cust*, int) // transfer money from customer to ticket clerk
+   askPopcorn() // ask for popcorn
+   askSoda() // ask for soda
+   selectAndAddInQueue() // choose the shortest line to add in
+   isCustTicketBueyr() //  decide if the customer is a ticket buyer
+   
+
++Ticket clerks
+  - Structure
+	 struct _TC
+	{
+		Manager *man;
+		unsigned int money;
+			Thread *selfThread;
+		QueueType queueType;
+		mtQueue *queue;
+		Cust *currentCust;
+		int msgBuffer;
+		Msg msgByMan;
+		Location location;
+		State state;
+	}TC;
+
+  - Functions
+    getTcState(int,int) //return current state of ticket takers
+    changTcState(int,int, State) // change the state of Ticket clerks based on the running thread
+    transferMoneyFromTcToMan(int,int) // manager will call this function to let ticket clerk transfer the amount of income to the manager
+    transferTicketFromTo(int, TC*, Cust*) // the ticket buyer will call this function to let the ticket clerk pass the tickets to him
+    #define broadcastAllTcLock( debugId, tcId1)\ // This function will broadcast all ticket clerks locks
+    #define waitOnTcLock( debugId, tcId1)\ // This function will let the program wait on the ticket clerks lock
+    #define signalToTcLock(debugId, tcId1)\ // This function is used to signal the ticket clerk there will be a lock
+    #define acquireTcLock(debugId, tcId1)\ // This function is used to acquire a lock
+    #define releaseTcLock(debugId, tcId1)\ // This function is used to release the lock of ticket clerks
+
++Concession Clerks
+  -Structure
+	 struct _CC
+	{
+		Manager *man;
+		unsigned int money;
+			Thread *selfThread;
+		Msg msgByMan;
+		int msgBuffer;
+		Cust *currentCust;
+		QueueType queueType;
+		mtQueue *queue;
+		Location location;
+		State state;
+	}CC;
+  - Functions
+    getCcState(int, int) // get the current state of concession clerks
+    changeCcState(int, int, State) // change the state of concession clerks based on the current thread running
+    transferMoneyFromCcToMan(int,int) // Manager will call this function to let the concession clerk to pass the amount of income to the manager
+    transferFoodFromTo(int, CC*, Cust*)// the customer will call this function to let the concession clerk pass the food to them
+    #define broadcastAllCcLock( debugId, ccId1)\ //this function will broadcast all the locks related to concession clerks
+    #define waitOnCcLock( debugId, ccId1)\ // This function will let the program wait on the concession clock
+    #define signalToCcLock(debugId, ccId1)\ // 	This function is used to signal the Concession clerk for lock
+    #define acquireCcLock(debugId, ccId1)\ // This function is used to acquire a lock for concession clerk
+    #define releaseCcLock(debugId, ccId1)\ // This function is used to Release the lock for Concession clerks
+
++Ticket Takers
+	 struct _TT
+	{
+		Cust *currentCust;
+		Manager *man;
+			Thread *selfThread;
+		Msg msgByMan;
+		Msg msgToMan;
+		Msg msgToCust;
+		Msg msgFromCust;
+		QueueType queueType;
+		mtQueue *queue;
+		Location location;
+		State state;
+	}TT;
+
+   -Functions
+    waitOnTtLock(int, int) // when the move started, lock the ticket takers to avoid taking tickets from customers
+    signalToTtLock(int, int) // tell the ticket takers to lock
+    acquireTtLock(int, int) // acquire lock to ticket takers
+    releaseTtLock(int,int) // release ticket takers' lock
+    getTtState(int,int) // return current state of ticket takers
+    changTtState(int, int ,State) // change the state of ticket taker based on the running thread
+    void waitOnTtLock(int debugId, int ttId) // This function will let the program wait on the lock
+    #define broadcastAllTtLock( debugId, ttId1)\ // This function will broadcast all the ticket takers' locks
+    void signalToTtLock(int debugId, int ttId) // This function is used to signal the ticket taker to lock
+    void acquireTtLock(int debugId, int ttId) // acquire a lock for ticket taker
+    void releaseTtLock(int debugId, int ttId) // release the ticket taker's lock
+
+
+
++MovieTechnician
+  - Structure
+	  struct _MovieTechnician
+	{
+		Manager *man;
+		Thread *selfThread;
+		State state;
+		Msg msgByMan;
+		Msg msgToMan;
+		Location location;
+	}MT;
+	
+  - Functions
+     getMtState(int) // return current state of Movie Technician
+     changeMtState(int, State) //change the state of movie technician based on the running thread
+
+	 struct _MtCb
+	{
+	int numTC;
+	int numCC;
+	int numTT;
+	TC *tc[MAX_TC];
+	CC *cc[MAX_CC];
+	TT *tt[MAX_TT];
+	MT *mt;
+	MvRoom *mvRoom;
+	int numCustGrp;
+	int numOfTicketsTaken;
+	CustGrp *custGrp[MAX_CUST_GRP];
+	Manager *man; 
+	mtQueue *queue[MAX_QUEUE_TYPE][MAX_NUM_QUEUE];
+	unsigned int numCust;
+	}MtCb;
+	
+	We set up Mt Cb, or the Movie theater control block, to keep track of all entities in one place. The control block is where all elements of all types are set up and all are accessible from here.
+	
+	- Main functions for entities
+	-----------------------------------
+	- ccMain() // concession clerk's main thread. In this function, we will check the current state of the concession clerk, if the current state is STARTED_BY_MAN, then we started initialize the queue for the concession clerk. if the current state is SIGNAL_BY_CUST or QUEUE_BUILDING,then we just remove the current customer. After removing the customer, we will check if the queue still contains any other customer. if there are still other customers, we just repeat the process to communicate with the customer. After all, we will check if the concession clerk is on break,if the clerk get a message from the manager to go on a break,  we will check the number of the customer in the queue first, and then we will decide if he can go on a break or not. Then we will check if the concession clerk get a message from the manager to GO_OFF_BREAK. And if the current state of the concession clerk is ON_BREAK, we just change the state to WAIT_FOR_CUST.
+ 
+	- tcMain() // ticket clerk's main thread. In this function, we use an always true while loop to complete the process. We will check the current state of the ticket clerk, if the current state is STARTED_BY_MAN, then we started initialize the queue for the ticket clerk. if the current state is SIGNAL_BY_CUST or QUEUE_BUILDING,then we just remove the current customer. After removing the customer, we will check if the queue still contains any other customer. if there are still other customers, we just repeat the process to communicate with the customer and sell them the tickets. After all, we will check if the ticket clerk is on break,if the clerk get a message from the manager to go on a break, we will check the number of the customer in the queue first, and then we will decide if he can go on a break or not. Then we will check if the ticket clerk get a message from the manager to GO_OFF_BREAK. And if the current state of the concession clerk is ON_BREAK, we just change the state to WAIT_FOR_CUST.
+
+	- ttMain() // ticket taker's main thread. In this function, we still use an always true while loop to complete the whole process to communicate with customer and manager. As the same as before, we check the current state of the ticket taker at first. if it is MAN_STARTING_MOVIE, we just set the state to ON_BREAK as he is not yet required to take tickets. if the ticket taker receive a message from the manager to let him go on a break, we just set the state to ON_BREAK too. If the ticket taker get a message FILL_CUST, then we just set the state of the ticket taker to FREEE_AND_TAKING_TICKET which will allow him to take the customers' tickets. And right before a movie started, the ticket clerk will find out if there is any group which contains less number of people than the seats left in the movie room, and the ticket taker will take them tickets and let them in.
+
+	- mtMain() // movie technician's main thread. In this function, we also used an always true while loop to complete the process of movie technician. At first, we will check if his state is STARTED_BY_MAN, if it is, we just change the state of the movie technician to MOVIE_IS_NOT_PLAYING. Then we will check if the current state if MOVIE_IS_PLAYING and if he send out a message that MOVIE_RUNNING, if it is, we just hold there until the movie finished. When the movie is finished, the we will change the customers' state, who are inside the movie room, to READY_TO_LEAVE_ROOM. and then we will change the state of the movie technician to MOVIE_IS_NOT_PLAYING.
+
+	- custMain() // customer's main thread. The customer thread will be started by the main thread. So at first, we will check if the current state of customer is STARTED_BY_MAIN. If it is, we will check if the customer is a ticket buyer. if it is a ticket buyer, then we change his state to LOOKING_FOR_TC_QUEUE, and if it is not, we will change its state to WAIT_FOR_TICKET_BUYER_FROM_TC. And then, we will check if the current state of the customer is LOOKING_FOR_TC_QUEUE. If it is, we will start a new process of getting tickets from the ticket clerk. After getting tickets, we will change the state of the ticket buyer to GOT_TICKET. After getting tickets, the ticket buyer will start looking for a concession clerk queue, so we just change the state of the current ticket buyer to LOOKING_FOR_CC_QUEUE, and other customers in the same group will be changed to WAIT_FOR_TICKET_BUYER_FROM_CC. After that, the ticket buyer will start the process to getting food from the concession clerk. After finishing this process, the state of the ticket buyer and other customers in the same group will be changed to GOT_FOOD. And then the group will move to lobby and the ticket buyer will start to look for a new ticket taker. And the states of other customers of the same group will be changed to WAIT_FOR_TICKET_BUYER_FROM_TT, and the state of the ticket buyer will be changed to LOOKING_FOR_TT. Then we will check the current state of each ticket taker, if any one of those ticket taker's state is FREE_AND_TAKING_TICKET, then the ticket buyer will choose the shortest line to add in the queue. If there is a movie running in the movie room right now, the ticket buyer will go back and wait in lobby until the ticket taker is available to take tickets. If the tickets are taken by a ticket taker, the location of the customer group will be changed to MOVIEROOM, and the state will be changed to TICKET_TAKEN. And then the customer group just starting looking for seats. Then we just check if the current state of the customer is LOOKING_FOR_SEATS, if it is, we just arrange seat for the customers. After finishing the process of taking seat, the customer will stay in the movie room until the movie ends. The state of the customers will be changed to READY_TO_LEAVE_MOVIE_ROOM, and then we just reset all the seats to be not taken, and change the state of all customers to LEFT_MOVIE_ROOM_AFTER_MOVIE. After leaving movie room, we still need to wait for some customer who are going to bathroom, after they come back, the customer group just leave the theater. 
+
+	- manMain() // manager's main thread.In this function, at first, we basically covered all the starting function of ticket clerks, concession clerks, ticket takers and movie technician in order to trigger their threads. And then we used an always true while loop to manage the queues of the Ticket clerks, concession clerks. We also use another two manage functions to manage the money from the ticket clerks and concession clerks.
+ 
+	- movieTheaterMain() //This is basically the first function called in the file. This contains calls to other functions for initialising values in the movie theater control block. We set up 
+	
+	- startCustThreads() // the function to trigger customers thread, in this function, we just change the states of all existing customers to STARTED_BY_MAIN in order to trigger the thread of customer.
+
+	- startManThread() // the function is used to trigger manager's thread. In this function, we basically just called the functions of startManThread() and startCustThreads() to trigger the whole program to run.
+
+	- Flow Of Program
+	--------------------------
+	When you start this program, it will let you input how many customers will be in this theater, and then, the the system will adding the certain number of customers into the system. The system will start simulating the operation of a theater immediately. At first, the customers will get in some groups automatically, and then based on the function isCustTicketBuyer() to decide which customer is the ticket buyer of a customer group. Then the ticket buyer will continue buying tickets and food based on the requirements of customers in their group. They will move together to the ticket taker, and they will hand in the tickets to ticket taker, then the customer group will wait for the allowance from ticket taker to get in the movie room. The ticket taker will wait for the information about when the movie stopped from the movie technician. And the manager will control when the movie started and when the movie stopped. When the concession clerk and ticket clerk have a queue which contains less the 2 people, the manager should tell them to go on the break by chance. When the customers get out from the movie room, we just reunion the group, and check each customer see if there is anyone want to go to the restroom be using function checkChance(). after a group has been reunioned, the program terminated.
+	
+IV. Implementation
+
+
+Part 1 Of The Project
+----------------------
+	- Wherever we needed atomic operations, we disabled and then enabled inputs to ensure the code in the middle was executed in that order with no changes. 
+
++ Files Modified:
+	- synch.h
+	- synch.cc
+	- threadtest.cc
+	- main.cc 
+	
++ Data Structures Added: 
+
+	- enum LockStatus {FREE, BUSY}; -- in file synch.h/synch.cc
+
++ Data Structures Modified
+	
+Part 1 Of The Project
+----------------------
+	- class Lock 		-- in file synch.h/synch.cc
+	{
+		//.Added Fields
+		Thread *LockOwner;		// A pointer to the thread which is the lock owner currently
+		LockStatus LockState;	// A variable which will store the state of Lock
+		List *LockWaitQueue;	// Wait queue for the lock 
+
+	}
+	
+	- class Condition	-- in file synch.h/synch.cc
+	{
+		//.Added Fields	
+		Lock *WaitingLock;			//To keep track of the associated lock
+		List *ConditionWaitQueue;	//To keep a track of all threads who want the lock
+	}
+	
++ Functions Added	
+
+Part 1 Of The Project
+----------------------
+	- ThreadTest_ForPart1()		-- in file threadtest.cc
+	
++ Functions Modified	
+
+Part 1 Of The Project
+----------------------
+	- Lock::Acquire()		-- in file synch.h/synch.cc
+	- Lock::Release()		-- in file synch.h/synch.cc
+	- Lock::isHeldByCurrentThread() -- in file synch.h/synch.cc
+	- Condition::Wait(Lock *conditionLock)		-- in file synch.h/synch.cc
+	- Condition::Signal(Lock *conditionLock)	-- in file synch.h/synch.cc
+	- Condition::Broadcasr(Lock *conditionLock)	-- in file synch.h/synch.cc
+	- main()					-- in file main.cc //Have added the function Threadtest_Part1 to run the function
+
+Part 2 Of The Project
+----------------------
++ File added:
+We create two files for this part, one is the main.h, and another one is main.cc. In the main.h file, we have all the structures (shows in the design doc above) and public datas, and in the main.cc file, we have all the functions and threads(both functions and threads are showed in the design doc above) in it.
+
++ Structure added in the Main.cc file
+  struct _mtQueue
+  struct _Manager
+  struct _Ticket
+  struct _Seat
+  struct _MvRoom
+  struct _Cust
+  struct _CustGrp
+  struct _TC
+  struct _CC
+  struct _TT
+  struct _MovieTechnician
+  struct _MtCb
+
++ Functions added in the main.cc file (except for the functions which are related to each structure)
+  - canClerkGoOnBreak() // function used to tell all clerks to go to break, including ticket clerks, concession clerks
+  - queueManage () // manage the queue in case a clerk is going on to a break, and get the number of customer in the queue currently
+  - moneyManage() // used to transfer both concession clerk's income and ticket clerk's income to manager
+  - initializeAllQueues() // initialize all the queues with 0 customers in queue
+  - initializeAllLocks() // initialize all the locks
+  - resetNumOfTicketTaken() // reset the number of tickets of ticket taker 
+  - initializeAllValues() // initialize all the values used in the system
+	
+V. Testing: 
+	 
+Part 1 Of The Project
+----------------------	 
++ Test Set 1 //These are the set of 5 tests given as part of the project:
+There are two ways to run this test:
+	1. Just run nachos -T on aludra
+Or,
+	1. Just run nachos on aludra.
+	2. The system will print out all the options of tests and running the whole program
+	3. Input the number 1 to run this test suite
+	
+	In the Test 1 - 
+	Three new threads are forked. We try and see what happens when a thread tries to release a lock it doesnt own
+	
+	In the Test 2 -
+	Two threads are forked and we try and see if the wait on condition works.
+	
+	In the Test 3 -
+	5 new threads are forked and they are all added to wait queue on condition. Signal is sent only once.
+	
+	In the Test 4 - 
+	Here 5 threads are forked and they are all added to wait queue on condition. Signal is called 5 times so that all the threads are freed.
+	
+	In the Test 5 -
+	Here two threads are forked. After a sequenced attainment of locks, one of them goes to wait on a CV and is never woken up.
+	
+	- Self-tests
+	These are written by us ourselves for testing of part 1
+	
+	To run this test:
+	1. Just run nachos on aludra.
+	2. The system will print out all the options of tests and running the whole program
+	3. Input the number 2 to run this test
+	
+	In Self test 1 - 
+	Two new threads shall be forked here. Each of them will run a sequence of Lock Acquire and Release statements. 
+		
++ Output for Test Set 1:
+
+	The Test Set 1, for part 1, will now be run
+
+	Starting Test 1
+	t1_t1: Acquired Lock t1_l1, waiting for t3
+	t1_t2: trying to acquire lock t1_l1
+	t1_t3: Trying to release Lock t1_l1
+	t1_t3: Trying to release Lock t1_l1
+	t1_t3: Trying to release Lock t1_l1
+	t1_t1: working in CS
+	t1_t1: Releasing Lock t1_l1
+	t1_t2: Acquired Lock t1_l1, working in CS
+	t1_t2: Releasing Lock t1_l1
+	Starting Test 2.  Note that it is an error if thread t2_t2
+	completes
+	t2_t1: Lock t2_l1 acquired, signalling t2_c1
+	t2_t1: Releasing Lock t2_l1
+	t2_t2: Lock t2_l1 acquired, waiting on t2_c1
+	Starting Test 3
+	t3_waiter0: Lock t3_l1 acquired, waiting on t3_c1
+	t3_waiter1: Lock t3_l1 acquired, waiting on t3_c1
+	t3_waiter2: Lock t3_l1 acquired, waiting on t3_c1
+	t3_waiter3: Lock t3_l1 acquired, waiting on t3_c1
+	t3_waiter4: Lock t3_l1 acquired, waiting on t3_c1
+	t3_signaller: Lock t3_l1 acquired, signalling t3_c1
+	t3_signaller: Releasing t3_l1
+	t3_waiter0: freed from t3_c1
+	Starting Test 4
+	t4_waiter0: Lock t4_l1 acquired, waiting on t4_c1
+	t4_waiter1: Lock t4_l1 acquired, waiting on t4_c1
+	t4_waiter2: Lock t4_l1 acquired, waiting on t4_c1
+	t4_waiter3: Lock t4_l1 acquired, waiting on t4_c1
+	t4_waiter4: Lock t4_l1 acquired, waiting on t4_c1
+	t4_signaller: Lock t4_l1 acquired, broadcasting t4_c1
+	t4_signaller: Releasing t4_l1
+	t4_waiter0: freed from t4_c1
+	t4_waiter1: freed from t4_c1
+	t4_waiter2: freed from t4_c1
+	t4_waiter3: freed from t4_c1
+	t4_waiter4: freed from t4_c1
+	Starting Test 5.  Note that it is an error if thread t5_t1
+	completes
+	t5_t1: Lock t5_l1 acquired, waiting on t5_c1
+	t5_t2: Lock t5_l2 acquired, signalling t5_c1
+	t5_t2: Releasing Lock t5_l2
+	t5_t2: Releasing Lock t5_l1
+	No threads ready or runnable, and no pending interrupts.
+	Assuming the program completed.
+	Machine halting!
+
+	Ticks: total 1591, idle 51, system 1540, user 0
+	Disk I/O: reads 0, writes 0
+	Console I/O: reads 0, writes 0
+	Paging: faults 0
+	Network I/O: packets received 0, sent 0
+
+	Cleaning up...
+	
+
+	- Extra Credit Part - We have made  extra test for part 1
+	
+	To run this test:
+	1. Just run nachos on aludra.
+	2. The system will print out all the options of tests and running the whole program
+	3. Input the number 2 to run
+	
+	In Self test 1 - 
+	Two new threads shall be forked here. Each of them will run a sequence of Lock Acquire and Release statements. 
+	
+		+ Output for Self Test 1:
+	
+	st1_t1: Acquired Lock st1_l1
+	st1_t2: Acquired Lock st1_l1
+	st1_t2: Released Lock st1_l1
+	st1_t2: Acquired Lock st1_l1
+	st1_t2: Released Lock st1_l1
+	st1_t2: Acquired Lock st1_l1
+	st1_t2: Released Lock st1_l1
+	st1_t1: Released Lock st1_l1
+	st1_t1: Acquired Lock st1_l1
+	st1_t1: Released Lock st1_l1
+	No threads ready or runnable, and no pending interrupts.
+	Assuming the program completed.
+	Machine halting!
+
+	Ticks: total 210, idle 0, system 210, user 0
+	Disk I/O: reads 0, writes 0
+	Console I/O: reads 0, writes 0
+	Paging: faults 0
+	Network I/O: packets received 0, sent 0
+
+	Cleaning up...
+	
+
+Part 2 of the project
+----------------------
++ Test
+  1. Just run nachos on aludra.
+  2. The system will print out all the options of tests and running the whole program
+  3. just input the number right before each options, you will get in the choosing option. It could be either a test or the whole program
+
++ Output:
+  - Test 1.
+     For the test 1, we just simulated two customer groups. And each of their ticket buyer  will choose the shortest line of the ticket clerk and concession clerks. and they are not choosing the same line at the same time.
+  - Test 2. 
+    For test 2, we simulated one manager, a concession clerk and a ticket clerk. The manager will always collect the money from either the ticket clerk or the concession clerk first, and then it will collect money from another clerk.
+  - Test 3.
+    For test 3, we build an interaction system among a clerk and two customers. The system will print out a message of each step of the whole process, so we can see that when the customer tell the current customer left, and when the customer get this information, it will message the clerk i have left, and at the same time ,it will also tell the next customer that " I have left, you can go to the clerk."
+  - Test 4. 
+    In this test, we initialize a really long line for a clerk, and it will message the manager we have two many people at here. Then, the manager will tell another clerk that you are off break. Then the new clerk will go to the front dest and get the customer will reform a new line.
+  - Test 5.
+    In this test, we used locks to avoid the race condition, we basically just tried several times to collect money from the two clerks, and see if there is any error show up for the total amount of money.
+  - Test 6. 
+    In this part, we basically skip all the part that a customer interacting with clerks, we just skip the process of buying tickets and buying food. So each time, we can see that the ticket buyer will go to a ticket clerk and directly get tickets and come back to the group, and then the group moves together to the next step until they get in the movie room.
+
+  - Extra Credit for the Project Part 2
+  - Simulation 1.
+    We have provided a complete simulation with 40 customers, 5 Ticket Clerks, 5 Concession Clerks and 3 Ticket Takers in our test suite. 
+
+  - Simulation 2.
+    We have provided a complete simulation with 6 customers, 1 Ticket Clerk, 1 Concession Clerk and 1 Ticket Taker in our test suite. 
+
+  - We have also used Debug-Logging. As a result, everytime the simulation was run, log files pertaining to the entities were also created - namely CUST_10<group_id><customer_id>.log for customers, manager.log for manager, CC_<id> for concession clerks, TC_<id> for ticket clerks, and  TT_<id> for ticket takers and MT.log for movie technician. More details are in miscellaneous section.
+
+  - Our whole simulation with all test cases is tested random seeds values 1 to 9999.	
+VI. Discussion
+
+Test Set 1 for Part 1:
+	Test 1:
+	+ Experiment Expectation:
+	The test should show that the thread not owning the lock is unable to release it.
+
+	+ Experiment Result: 
+	The thread t1_t1 acquires the lock t1_l1. t1_t2 and t1_t3 threads cant acquire it and an error msg is shown when they try to release it. Once t1_t1 has worked in critical section, it releases lock and others can acquire and then release it. 
+	
+	+ Explanation: 
+	The thread t1_t1 acquires the lock t1_l1 and then waits for t1_t2 to get it. Sequencing is done using Semaphores. Thread t2 waits for t1_l1 and thread t3 till work in the CS is done by t1. Since lock is already there with someone, t1_t2 and t1_t3 threads cant acquire and an error msg is shown when they try to release it - that they are trying to release a lock that they dont own. Once t1_t1 has worked in critical section, it re
+
+	Test 2:
+	+ Experiment Expectation:
+	This test should show that Signals are not stored -- a Signal with no thread waiting is ignored
+	
+	+ Experiment Result:
+	The thread t2_t1 acquires the lock t2_l1 and and then signals the CV t2_c1 with the lock. It then releases its lock and control is transferred to thread t2_t2. It acquires the lock t2_l1 and then goes on sleep as part on wait on CV with lock t2_l1. Since no signal function is called with that lock, it is never woken up and the thread doesnt complete. 
+
+	+ Explanation:
+	When the thread t2_t1 signals the CV t2_c1 with the lock t2_l1,  no one is waiting for it though. So it just does its next step. It then releases its lock and a semaphore is used to transfer control to thread t2_t2. This thread goes on sleep as part on wait on CV with lock t2_l1, but with no one to wake it up it is never completed to run the release t2_l1 statement. 
+
+		
+	In test  3:
+	+ Experiment Expectation:
+	This test should show that one signal statement only wakes up one thread that is on wait
+	
+	+ Experiment Result:
+	5 waiter threads are created and they are all given lock t3_l1 before being asked to go to sleep with CV with lock t3_l1. Then broadcast function is called once, and one after another all of them are awoken.
+
+	+ Explanation:
+	The signal function is called only once so just the first on the queue thread is run. The rest of the waiters are left unchanged.
+	
+	In test 4:
+	+ Experiment Expectation:
+	This test should show that one broadcast statement wakes up all sleeping threads
+	
+	+ Experiment Result:
+	5 waiter threads are created and they are all given lock t3_l1 before being asked to go to sleep with CV with lock t3_l1. Then broadcast function is called once, and all waiting threads are woken up in order.
+
+	+ Explanation:
+	This is similar to test 3, except that a Broadcast funciton is used instead of Signal function to get waiter threads to return from sleep. So all five return one after the other. They come in an order as a Condition Wait Queue has been implemented.
+	
+	In test 5:
+	+ Experiment Expectation:
+	This test should show that signalling a thread waiting under one lock while holding another is a fatal error
+	
+	+ Experiment Result:
+	Two threads are forked - t5_t1 and t5_t2. The first one acquires the lock t5_l1 and then goes to wait on a CV with lock t5_l1. The control moves to thread t5_t2 and it acquires locks t5_l1 and t5_l2. Now, it calls Signal on CV with lock t5_l2. No one is woken up and it continues to execute and the test ends. 	
+
+	+ Explanation:
+	The thread t5_t1 is not run again since it was waiting on t5_l1 lock but the signal was sent on lock t5_l2. So it is never woken up and the test set is completed without t5_t1 being able to complete.
+
+	In Self-test 1:
+	+ Experiment expectation
+	The locks acquire and release statements will be succesfully be carried out in given sequence
+	
+	+ Experiment Result:
+	Two threads are forked - st1_t2 and st1_t2. The first one acquires the lock st1_l1 and then uses semaphore to allow st1_t2 to acquire it. And then it goes to wait on a CV with lock st1_l1. The control moves to thread st1_t2 which runs a series of acquire and release statements. And then signals the CV with st1_l1 as lock. st1_t1 is awoken and executes its own statements of acquire and release. 	
+
+	+ Explanation:
+	The locks and CVs are working as they should. So st1_t1 doesnt go to sleep iwth lock st1_l1. It releases lock as part of wait on CV. st1_t2 can then acquire it. 
+
+For Part 2
+	+ Experiment Expectation:
+		We expect the movie theater to be smoothly simulated
+		  
+	+ Experiment Result:
+		The Project runs successfully. The Simulation of Carl's Junior runs completely for each and every value of en
+	
+	+ Explanation:
+		The project runs succefully for all parts of project
+
+VII. Miscellaneous
+
++Acknowledgement
+        We are thankful to the almighty, Professor Michael Crowley, teaching assistants and graders for their immense support.
+
++Debug-Logging Api
+	We have used the Debug Api in our implementation to aid the testing phase of development. As a result, everytime the simulation was run, log files pertaining to the entities were also created - namely CUST_10<group_id><customer_id>.log for customers, manager.log for manager, CC_<id> for concession clerks, TC_<id> for ticket clerks, and  TT_<id> for ticket takers and MT.log for movie technician.
+	
+	Our code has statements of the form : 		
+		MAIN_PRINT_DEBUG_WARN("Sending cust=%d grp=%d on WAIT\n", custId, grpId);
+	These get written into that log file. They show up as:
+		mt_main||WARN||changeCustState||260||09-14-111||23-19-44-846116||Sending cust=0 grp=0 on WAIT
+		
+	The first word is name of main function of file (mt_main here), next is the type of statement - Warn,  after tha we have the function where this statement was called - changeCustState, next we have the line number in the .cc file - 260, after that we have date and timestamp - 09-14-111||23-19-44-846116, and finally we have the statement that was given as the debug statement.
+	
+	For our project submission we have disabled the Api in our project so that the execution time is increased manifold. To enable it again, please take following steps:
+		1. Open the movieTheatureMain.cc file in the threads directory
+		2. The 20th line has set gDebugLevel=0. If we change it to a non-zero value, log files will start to be created. 
+		
+		While developing, we had used it as 255 - so that we saw all the prints and all the associated functions,timestamp etc. as described above. A value of 1 creates log files, without writing into them; a  value of 2 creates only those prints which are specified as ERR, or Error (unlikee WARN in example); 32 only prints out the verbose statement, and so on.
+		
+		
+	
+	
