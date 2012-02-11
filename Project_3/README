@@ -1,0 +1,988 @@
+Title:  Writeup for Project 3, Fall 2011
+
+
+ Date:  10/30/11
+
+ Group Num 3 : Name            			Email            			Student ID
+
+ 	        Achintya Singhal                achintya@usc.edu            		4414-3387-71
+		Jaspreet Singh	  	    	jaspreet@usc.edu		 	7464-2592-81
+       	        Sumit Wattal          	        wattal@usc.edu            	        7555-9290-28
+
+
+I. Requirements
+
+	Part 1 - TLB Management
+	------------------------
+	
+	We need to implement a software-management for a Translation Look-aside Buffer, or, TLB. We are required to 
+	write code for address translation that will handle TLB misses. We need to make sure that the TLB state is set 
+	up properly whenever there is a context switch. Our page translation scheme should keep track of the dirty and 
+	use flags for each page set by hardware in the TLB entry. This should work even when more than one userprogram
+	is being run at a time, using the Exec syscall.
+	
+	Part 2 - Virtual Memory Management
+	----------------------------------
+	
+	For this we need to write functions to move from disk to memory and from memory to disk. The Nachos file system
+	is used to manage our swap file. A single swap file is to be setup for all Nachos processes and threads. We are
+	to organize the swap file by pages and nothing is to be preloaded from the executable when a process starts up. 
+	We are required to keep track of each virtual page and whether it is in memory, in the swap file, or in the 
+	original executable. We do not have to worry about the executable being changed during a Nachos execution.
+	
+	Part 3 - Remote Procedure Calls (RPCs) 
+	----------------------------------
+	
+	We are to implement RPCs for Locks and CVs system calls that we implemented in project 2. We also need to make 
+	new system calls for handling monitor variables. We need calls to : Create them,  Retrieve their value, and Set 
+	their value. These system calls are to be sent from a 'client' instance of Nachos to a "server" instance of 
+	Nachos. The server is to be able to handle multiple clients - just like the operating system can handle multiple 
+	address spaces. Any of the system calls mentioned above that is made by a client is to be sent to the server 
+	Nachos. The server performs the system call for the client and returns any result back to the client. Thus, all 
+	the user programs share all Locks and CVs. They are no longer process specific as they were in Project 2. 
+	We need to improve existing low-level network communications facilities to build a nicer abstraction on top of 
+	that and use that abstraction in building a distributed application.
+	
+
+II. Assumptions
+	
+	-- When selecting the desired policy for page replacement please add -PFIFO or -PRAND as an additional argument before you use -x command line argument. Default page replacement policy taken is FIFO.
+	-- The server is always given a machine id of 0.
+	-- We can only create 250  each of distributed Locks, CVs and MVs. If attempts to do more that are send the server
+	simply responds to clients as saying that it was abad request.
+	-- Once a request for  deletion of a lock, CV or MV is given to the server by any of the client user programs, the
+	server will not queue up any new requests for AcquireLock, WaitCV or GetMV or SetMV respectively
+	-- All monitor variables are integers.
+	-- The CVs, locks and MVs cannot have names that are more than 14 characters in length.
+	-- The DestroyCV and DestroyLock requests ensure that no new WaitCV and AcquireLock requests will be serviced,
+	respectively.
+
+III. Design
+
+	For Parts 1 & 2
+	---------------
+
+	Algorithm is as follows::
+	>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+	In case of a TLB miss, we check whether the errorreous page is in the IPT (Inverted Page Table) or not.
+
+	If it is in the IPT, then we get the physical page number from there.
+
+	However, if we get an IPT miss as well, then we:
+	
+	We lookup the bitmap. 
+	
+	If that bitmap returns us a -1, ie, no new page could be found --> 
+		- We would need to evict a page from fifo queue (when we are following a FIFO replacement policy). When we do
+		that, we remove the entry from the fifo queue and put its contents into the swap file that is there on our 
+		filesystem. 
+		
+		- At the pagetable, we store the offset pointer of that swap file location where removed physical page 
+		number data is saved.
+		
+		- And, at the page table we set the disklocation to be swapfile.
+
+	Now, if the page to be evicted had belonged to same process that is now requesting a new page, we check for a 
+	valid TLB entry for the selected page. 
+	
+	We now need to propagate the dirty bit from the TLB to the IPT. We also invalidate the entry the TLB entry as 
+	well. 
+	
+	If VPN is in the executable -->
+		- Then we read from executable and allocate  physical page number, and load it in the TLB.
+	
+	If VPN is not_on_disk that is its on stack -->
+		- Then we allocate a PPN, if neccesary, and load it in TLB
+
+	If VPN is in the swap file -->
+		- We read from the swap file, like we are doing it in the executable step.
+		- We also allocate a physical page number, if needed, and load it in the TLB.
+		
+	We also propagate the dirty bit on context switch also.
+	
+	We copy the VPN data at IPT entry, and index PPN to the PPN page, which is found after the eviction.
+	
+	We propogate the dirty bit from TLB to IPT and copy the data to the TLB next current index. 
+
+	For Part 3
+	---------------
+
+	We define new classes ServerLock, ServerCondition and MonitorVariable in the synch.h file. We use them in the Server.cc
+	file in network directory to implement them. 
+	To begin we call the function RunServer in our  main.cc file  if arguments -m 0 were passed to the nachos instance. This 
+	runs that instance as server. The server instance simply checks for each request type and addresses them:
+		
+		--Creation of Locks,CVs and/or MVs : Name of entity is passed as argument
+		
+		This basically redirects the request to a FindLocks/FindCV/FindMV depending on the request. We first check if lock/CV/MV for same name has already been created. If so, we just retun its id to the user program.
+		Next we look for a new lock number to be found - we use a Bitmap for that. A new number is generated and that is sent as
+		number for Lock/CV/MV back to client instance. This number lies between 0 and 249. If no lock is available - all 250 have been 
+		made we print message showing exhaustion ofr locks/CV/MV
+		
+		-- Acquiring Locks : A number is given as argument
+		We first check is it the given lock number lock number is a valid one - ie, it lies between 0 and 250. If not, we tell
+		client that it is a badLock number. If it is valid, we will go and check if there is a pending delete request. If so,
+		we simply ignore this request - as per our assumption given in Section II of write-up. Otherwise the requesting client
+		has the lock. We increement counter for lock usage.
+		
+		
+		-- Releasing Locks : A number is given as argument
+		Here also, we first check is it the given lock number lock number is a valid one - ie, it lies between 0 and 250. If so, we check if that client had earlier sent request for creation or not. If 
+		not, we tell client that it is a badLock number. If it is valid, we will let go of the lock. Also, if we have a 
+		pending acquire request on that lock - we give lock to that client. If not, we reclaim this lock number And if there 
+		is a pending delete request. If so, we simply delete lock at end  of this release. We decrement counter for lock usage.
+		
+		-- Destroying Locks : A lockid is given as argument
+		Here also, we first check is it the given lock number lock number is a valid one - ie, it lies between 0 and 250. If so, we check if that client had earlier sent request for creation or not. If 
+		not, we tell client that it is a badLock number. If it is valid, we will next check the lock usage counter. If it is 
+		zero we can go ahead and destroy lock. If it is non-zero we set flag signfying this lock shall be deleted. 
+		
+		-- WaitCV: has two arguments - A lockid and a cvid 
+		We validate the given lockid and cvids. They must both be valid numbers between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. If there has been delete called on CV we cant continue. FOr every
+		waitcall we increment in use counter. The client goes to sleep now.
+		
+		-- SignalCV: has two arguments - A lockid and a cvid 
+		We validate the given lockid and cvids. They must both be valid numbers between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not.  For every signal call we decrement in use counter. If there is a 
+		pending delete request we address the request. 
+		
+		-- DestroyCV: A cvid given as argument
+		We validate the given cvid. It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. Otherwise, we send error to client. If so, we check if 
+		someone is waiting - if yes then we set flag signifying to be deleted. Otherwise, we just delete it.
+		
+		-- SetMV - has two arguments - a MV id number and a number which is to be set as value
+		We validate given mvid.  It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. If not so  then we send BadMV error to client. If so, we just
+		set the value of that MV as the given number. 
+		
+		-- GetMV - a MV id number is argument
+		We validate given mvid.  It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. If not so  then we send BadMV error to client. If so, we just
+		set return the value of that MV. 
+
+		-- DestroyMV: A MV id given as argument
+		We validate the given mvid. It must be valid number between 0 and 250. If so, we check if that 
+		client had earlier sent request for creation or not. Otherwise, we send BadMV error to client. If so, we delete the MV.
+			
+		
+	
+IV. Implementation
+
+	+ Files added:
+	
+		in /network directory
+		
+		-- Server.cc 
+		
+		in /test directory
+		
+		--  DistCVTest1_1.c 
+		--  DistCVTest1_2.c
+		--  DistCVTest2_1.c
+		--  DistCVTest2_2.c
+		--  DistCVTest2_3.c
+		--  DistCVTest3_1.c
+		--  DistCVTest3_2.c
+		--  DistCVTest3_3.c
+		--  DistCVTest3_4.c
+		--  DistCVTest3_5.c
+		--  DistCVTest4_1.c
+		--  DistCVTest4_2.c
+		--  DistCVTest4_3.c
+		--  DistCVTest5_1.c
+		--  DistCVTest5_2.c
+		--  DistCVTest5_3.c
+		--  DistLockTest6_1.c
+		--  DistLockTest6_2.c
+		--  DistLockTest6_3.c
+		--  DistCVTest7_1.c
+		--  DistCVTest7_2.c
+		--  DistCVTest7_3.c
+		--  DistMVTest8_1.c
+		--  DistMVTest8_2.c
+		--  DistMVTest8_3.c
+		--  DistCVTest9_1.c
+		--  DistCVTest9_2.c
+       		--  execForkMatmult.c
+        	--  execForkSort.c
+        	--  execMatmult.c
+        	--  execMatmult1.c
+        	--  execSort.c
+        	--  execSort1.c
+        	--  forkMatmult.c
+        	--  forkMatmult1.c
+        	--  forkSort.c
+        	--  forkSort1.c
+        	--  sort.c
+        	--  matmult.c
+		
+	+ Files Modified:
+	
+		
+		in /userprog directory
+	
+		-- addrspace.h / addrspace.cc
+		-- Process.h / Process.cc
+		-- exception.cc / syscall.h
+		
+		in /threads directory
+		
+		-- thread.cc / thread.h
+		-- synch.h / synch.cc
+		-- main.cc 
+		-- system.cc / system.h
+		
+		in /test directory
+		
+		-- Makefile
+
+		in /network directory
+
+		-- Makefile
+		
+		
+    + Data Structures Added
+	
+		-- in /userprog/addrspace.h 
+		 
+		enum DiskLocation { EXECUTABLE=0, NOT_ON_DISK, SWAP_FILE };
+
+		class IPT:public TranslationEntry //subclass of Translation entry class
+		{
+			public:
+			AddrSpace *space;
+		}
+
+		typedef struct _PageTableEnhancedData
+		{
+			DiskLocation diskLocation;
+			int byteOffset;
+		}PageTableEnhancedData;
+	
+		-- in /threads/synch.h 
+		
+		class ServerLock
+
+		class ServerCondition
+
+		class MonitorVariable
+
+		class Response
+			
+		
+	+ Data Structures modified
+
+		-- in userprog/addrspace.h , addrspace.cc
+		
+		class AddrSpace
+
+	
+	+ Functions Added
+	
+		-- in /userprog/addrspace.h , addrspace.cc
+
+		void AddrSpace::populateTLBFromPagetable(int currentVPN)
+
+		int evictPageFromMemory()
+
+		int AddrSpace::handleIPTMiss(int currentVPN)
+	
+		int populateTLBFromIPT(int currentVPN)
+		
+		-- in /userprog/syscall.h , exception.cc
+		
+		int SendToServer(char *msg)
+
+		int CreateMV(unsigned int vaddr)
+
+		int GetMV(int mvID)
+
+		int SetMV(int mvID, int val)
+
+		void DestroyMV(int mvID)
+
+		-- in /network/Server.cc
+		
+		int FindLocks(char *lockName)
+
+		int FindCondition(char *cvName)
+
+		int FindMV(char *mvName)
+
+		void RunServer()
+
+		-- in /threads/synch.cc , synch.h
+		
+		ServerLock::ServerLock(char *name)
+	
+		ServerLock::~ ServerLock()
+
+		void ServerLock :: Acquire(int networkID, int mailboxID)
+
+		Response* ServerLock :: Release(int networkID, int mailboxID)
+
+		LockStatus ServerLock :: GetLockState()
+
+		ServerCondition::ServerCondition(char *nm)
+
+		ServerCondition::~ServerCondition()
+
+		Response* ServerCondition :: Wait(int waitLock, int networkID, int mailboxID)
+
+		bool ServerCondition :: Signal(int waitLock)
+
+		bool ServerCondition :: Broadcast(int waitLock)
+
+		MonitorVariable :: MonitorVariable(char *nm)
+
+		MonitorVariable :: ~MonitorVariable()
+
+		int MonitorVariable :: setValue(int val)
+
+		
+		
+	
+	+ Functions Modified
+	
+		-- in /userprog/addrspace.h , addrspace.cc
+
+		AddrSpace::AddrSpace
+
+		int AddrSpace :: ResizePageTable()
+	
+		void AddrSpace :: RemoveThreadStack()
+
+		-- in /userprog/syscall.h , exception.cc
+		
+		int CreateLock_Syscall(unsigned int vaddr)
+
+		void AcquireLock_Syscall(int lockID)
+
+		void ReleaseLock_Syscall(int lockID)
+
+		void DestroyLock_Syscall(int lockID)
+
+		int CreateCV_Syscall(unsigned int vaddr)
+
+		void WaitCV_Syscall(int lockID, int cvID)
+
+		void SignalCV_Syscall(int lockID, int cvID)
+
+		void BroadcastCV_Syscall(int lockID, int cvID)
+
+		void DestroyCV_Syscall(int cvID)
+			
+		void Exit_Syscall(unsigned int status)
+
+		void ExceptionHandler(ExceptionType which)
+		
+	
+V. Testing
+
+	To compile the tests:
+		Go to /code/test directory and run the make all command
+		
+	Also,
+	each of these tests can be run with PFIFO or PRAND to denote FIFO or RANDOM page replacement policies. To run them with
+	the desired policy, please add -PFIFO or -PRAND as an additional argument before you use -x command to specify the test
+	to run. The default is taken PFIFO if no argument has been given.
+	
+	Parts 1 & 2
+	-----------
+	
+	1. matmult
+	
+	To run this test -
+	
+				nachos -PRAND -x ../test/matmult 
+				or
+				nachos -PFIFO -x ../test/matmult
+				
+		
+		+Test Output
+		
+		We run a single matmult test. The matrix multiplication gives 7220 as value of point in last column, last row.
+		
+		The screen shows output as :
+		
+
+		 The last value is 7220
+		Machine halting!
+
+		Ticks: total 4070826, idle 0, system 3364380, user 706446
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...	
+	
+	2. execMatmult1
+	
+	To run this test -
+	
+				nachos -PRAND -x ../test/execMatmult1 
+				or
+				nachos -PFIFO -x ../test/execMatmult1
+				
+		
+		+Test Output
+		
+		This test execs a single matmult test. the matrix multiplication gives 7220 as value of point in last column, last row.
+		
+		The screen shows output as :
+		
+		 The last value is 7220
+		Machine halting!
+
+		Ticks: total 4072021, idle 0, system 3365540, user 706481
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+ 
+		
+	3. execMatmult
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/execMatmult
+				or
+				nachos -PFIFO -x ../test/execMatmult
+				
+		
+		+Test Output
+		
+		This test execs a couple of matmult tests. The matrix multiplication gives 7220 as value of point in last column, last row. We get that twice here.
+		
+		The screen shows output as :		
+
+		 The last value is 7220
+
+		 The last value is 7220
+		Machine halting!
+
+		Ticks: total 8135315, idle 0, system 6722380, user 1412935
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+	4. execForkMatmult
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/execForkMatmult
+				or
+				nachos -PFIFO -x ../test/execForkMatmult
+				
+		
+		+Test Output
+		
+		This test execs one matmult and forks another of matmult. The matrix multiplication gives 7220 as value of point in last column, last row. We get that twice here.
+		
+		The screen shows output as :		
+
+		 Forked: The last value is 7220
+
+		 The last value is 7220
+		Machine halting!
+
+		Ticks: total 8146187, idle 0, system 6728490, user 1417697
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+		5. forkMatmult1
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/forkMatmult1
+				or
+				nachos -PFIFO -x ../test/forkMatmult1
+				
+		
+		+Test Output
+		
+		This test  forks one of matmult. The matrix multiplication gives 7220 as value of point in last column, last row. 
+		
+		The screen shows output as :		
+
+		  Forked: The last value is 7220
+		Machine halting!
+
+		Ticks: total 4077726, idle 0, system 3366490, user 711236
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+	
+		6. forkMatmult
+		
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/forkMatmult
+				or
+				nachos -PFIFO -x ../test/forkMatmult
+				
+		
+		+Test Output
+		
+		This test forks two of matmult. The matrix multiplication gives 7220 as value of point in last column, last row. We get that twice here.
+		
+		The screen shows output as :		
+
+
+		  Forked 1: The last value is 7220
+
+		 Forked 2: The last value is 7220
+		Machine halting!
+
+		Ticks: total 8971813, idle 0, system 7533290, user 1438523
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+	7. sort
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/sort
+				or
+				nachos -PFIFO -x ../test/sort
+				
+		
+		+Test Output
+		
+		We run a single sort test. The sort operation gives 1023 as output.
+		
+		The screen shows output as :
+		
+
+		The value after sort is 1023
+		Machine halting!
+
+		Ticks: total 4070826, idle 0, system 3364380, user 706446
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+		8. forkSort1
+		
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/forkSort1
+				or
+				nachos -PFIFO -x ../test/forkSort1
+				
+		
+		+Test Output
+		
+		This test forks one of sort. The sort operation gives 1023 as output. 
+		
+		The screen shows output as :		
+
+		Forked Sort started...
+
+		Forked: The value after sort is 1023
+		Machine halting!
+
+		Ticks: total 86272977, idle 0, system 66032320, user 20240657
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+		9. forkSort
+		
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/forkSort
+				or
+				nachos -PFIFO -x ../test/forkSort
+				
+		
+		+Test Output
+		
+		This test forks two of sort. The sort operation gives 1023 as output. We get that twice here.
+		
+		The screen shows output as :		
+
+		Forked Sort 1 started...
+
+		Forked 1: The value after sort is 1023
+
+		Forked Sort 2 started...
+
+		Forked 2: The value after sort is 1023
+
+		Machine halting!
+
+		Ticks: total 172636051, idle 0, system 132153770, user 40482281
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+		10. execForkSort		
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/execForkSort
+				or
+				nachos -PFIFO -x ../test/execForkSort
+		
+			(This can take about 25 mins to run)
+			
+		+Test Output
+		
+		This test execs one of sort and forks another. The sort operation gives 1023 as output. We get that twice here.
+		
+		The screen shows output as :		
+
+		Sort started..
+
+		The value after sort is 1023
+
+		 Forked sort started..
+
+		Forked: The value after sort is 1023
+		Machine halting!
+
+		Ticks: total 172553049, idle 0, system 132071790, user 40481259
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+		
+		11. execSort1
+		
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/execSort1
+				or
+				nachos -PFIFO -x ../test/execSort1
+				
+		
+		+Test Output
+		
+		This test execs one of sort. The sort operation gives 1023 as output. 
+		
+		The screen shows output as :		
+
+		Sort started..
+
+		The value after sort is 1023
+		Machine halting!
+
+		Ticks: total 86272778, idle 0, system 66032120, user 20240658
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+
+
+		12. execSort 
+		
+	
+		To run this test -
+	
+				nachos -PRAND -x ../test/execSort
+				or
+				nachos -PFIFO -x ../test/execSort
+				
+			(This can take about 25 mins to run)
+		
+		+Test Output
+		
+		This test execs two of sort. The sort operation gives 1023 as output. We get that twice here.
+		
+		The screen shows output as :		
+
+
+		Sort started..
+
+		The value after sort is 1023
+
+		Sort started..
+
+		The value after sort is 1023
+		Machine halting!
+
+		Ticks: total 172553099, idle 0, system 132071810, user 40481279
+		Disk I/O: reads 0, writes 0
+		Console I/O: reads 0, writes 0
+		Paging: faults 0
+		Network I/O: packets received 0, sent 0
+
+		Cleaning up...
+		
+	Part 3
+	------
+	
+	If we attempt to input something other than a string to CreateLock and CreateCV, the code refuses to compile.
+	
+	13. We will be running one server and two user programs as clients programs.
+		
+		To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the two client programs, open two more terminals for Aludra and run the two user programs one after another
+				nachos -m 1 -x ../test/DistCVTest1_1
+				
+				nachos -m 2 -x ../test/DistCVTest1_2
+				
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock, CreateCV, WaitCV, SignalCV,
+		DestroyCV
+		
+		+Test Output
+		
+		This test will show that DistCVTest1_1 will wait for DistCVTest1_2 to signal it. Then DistCVTest1_2 will go on 
+		wait. After DistCVTest1_1 wakes, it will signal DistCVTest1_2 and wake it up.
+
+		
+	14. We will be running one server and three user programs as clients programs.
+		
+		To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the two client programs, open two more terminals for Aludra and run the two user programs one after another
+				nachos -m 1 -x ../test/DistCVTest2_1
+				
+				nachos -m 2 -x ../test/DistCVTest2_2
+				
+				nachos -m 3 -x ../test/DistCVTest2_3
+
+				(The testfile DistCVTest2_2 is to be run once DistCVTest2_1 says "Client 1 to go on wait..." and the file DistCVTest2_3 is to be run once DistCVTest2_2 says "Client 2 to go on wait...")
+				
+
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock, CreateCV, WaitCV, SignalCV,
+		DestroyCV
+		
+		+Test Output
+		
+		Both DistCVTest2_1 and DistCVTest2_2 will go to sleep. And DistCVTest2_3 will broadcast and awake them both.
+		This shows BroadcastCV only wakes up all of sleeping clients.
+		
+	15. We will be running one server and five user programs as client programs.
+
+	To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the client programs, open five more terminals for Aludra and run the user programs one after another
+
+				nachos -m 1 -x ../test/DistCVTest3_1
+				
+				nachos -m 2 -x ../test/DistCVTest3_2
+				
+				nachos -m 3 -x ../test/DistCVTest3_3	
+
+				nachos -m 4 -x ../test/DistCVTest3_4	
+
+				nachos -m 5 -x ../test/DistCVTest3_5	
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateMV, SetMV, GetMV
+	
+		+Test Output:
+		
+		DistCVTest3_1 creates a new MV and sets it to be 9 initially. The other four user programs are then run one 
+		after another and increase the MV one by one.  So finally, DistCVTest3_5 sets it to be = 9+(5-1) = 13.
+		
+
+	16. We will be running one server and three user programs as client programs.
+	
+		To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the client programs, open three more terminals for Aludra and run the two user programs one after another
+
+				nachos -m 1 -x ../test/DistCVTest4_1
+				
+				nachos -m 2 -x ../test/DistCVTest4_2
+				
+				nachos -m 3 -x ../test/DistCVTest4_3
+
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV,
+		DestroyCV
+	
+		+Test Output:
+		
+		DistCVTest4_1 goes on wait for CV 0 on lock O.  DistCVTest4_2 signals it up and goes on wait for CV 1 on 
+		lock 0. DistCVTest4_3 signals it up and asks to destroy CV. Next it goes on wait but that isnt serviced as CV
+		has been destroyed. So statement prints and it exists.
+		
+	17. We will be running one server and three user programs as client programs. 
+
+	To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the client programs, open three more terminals for Aludra and run the user programs one after another
+
+				nachos -m 1 -x ../test/DistCVTest5_1
+				
+				nachos -m 2 -x ../test/DistCVTest5_2
+				
+				nachos -m 3 -x ../test/DistCVTest5_3	
+
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateMV, SetMV, GetMV, DestroyMV
+	
+		+Test Output:
+		
+		This is similar to test 3. However, before incrementing in DistCVTest5_2 we simply delete the MV.  Now when we use GetMV
+		to obtain value we get an error saying BadMV and we are returned a -1 - signifying wrong input.
+		
+	18. 	We will be running one server and three user programs as client programs. 
+
+	To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the client programs, open three more terminals for Aludra and run the user programs one after another
+
+				nachos -m 1 -x ../test/DistLockTest6_1
+				
+				nachos -m 2 -x ../test/DistLockTest6_2
+				
+				nachos -m 3 -x ../test/DistLockTest6_3	
+
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock
+	
+		+Test Output:
+		
+		Here we create a lock in both of DistLockTest6_1, DistLockTest6_2 and destroy the second one at end of 
+		DistLockTest6_2. In DistLockTest6_3 we attempt to acquire and release both of these. However, attempts to 
+		acquire deleted lock throws error. The client gets an error msg stipulating badLock. 
+		
+	19. 	We will be running one server and three user programs as client programs. 
+
+	To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the client programs, open three more terminals for Aludra and run the user programs one after another (e till previous program is stuck)
+
+				nachos -m 1 -x ../test/DistCVTest7_1
+				
+				nachos -m 2 -x ../test/DistCVTest7_2
+				
+				nachos -m 3 -x ../test/DistCVTest7_3	
+
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, DestroyLock, DestroyCV
+	
+		+Test Output:
+		
+		Here we create a lock and a CV in DistCVTest7_1. That program goes on wait and is signalled by
+		DistCVTest7_2. It wakes and completes and DistCVTest7_2 goes on wait. DistCVTest7_3 then wakes 
+		DistCVTest7_2. It destroys CV and attempts to go on wait but that does not happen as CV has been destroyed.
+		So statement prints.
+			
+	20. We will be running one server and three user programs as client programs.
+
+	To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the client programs, open three more terminals for Aludra and run the user programs one after another
+
+				nachos -m 1 -x ../test/DistMVTest8_1
+				
+				nachos -m 2 -x ../test/DistMVTest8_2
+				
+				nachos -m 3 -x ../test/DistMVTest8_3	
+
+		
+		Syscalls covered in this test - CreateLock, AcquireLock, ReleaseLock, CreateMV, SetMV, GetMV, CreateCV. 
+		WaitCV, SignalCV
+	
+		+Test Output:
+		
+		DistMVTest8_1 creates two monitor variables. The first one is initialized to 500 and the other to 11. The 
+		first one is then modified in the other two Test files in loops, both of whom run 500 times. The loop in 
+		DistMVTest8_2 increases it value by 3 everytime and the one in DistMVTest8_3 by 7 everytime. We use locks 
+		and CVs to implement no race condition. The file DistMVTest8_2 increases the value first and seqenced to make
+		sure that so is always the case for each loop. At end of combined 1000 iterations the 1st monitor variable is
+		now 500 + 500*3 + 500*7 = 5500 (seen in client 3). This test shows stability of our monitor variable.
+		The second MV is there so that once the second test is complete, the first test no longer goes to Wait CV. 
+		
+		
+	21. We will be running one server and two user programs as client programs to do these negative tests.
+
+	To run this test -
+			Go to the network directory and run one nachos as server:
+					nachos -m 0 -server
+					
+			For the client programs, open three more terminals for Aludra and run the second user program after the first one
+			runs to completion
+
+				nachos -m 1 -x ../test/DistCVTest9_1
+				
+				nachos -m 2 -x ../test/DistCVTest9_2
+				
+		
+		Syscalls covered in this test - CreateLock, CreateMV, AcquireLock, ReleaseLock, CreateCV, WaitCV, SignalCV, 
+		DestroyCV, DestroyLock, DestroyMV
+	
+		+Test Output:
+		
+		This test shows that even if our client programs are creating same resources again and again - the code 
+		remains stable. And also, when we try yo delete non-existent locks, Cvs or MVs - nachos doesnt crash. 
+		We make 250 locks cvs and mvs. When we try to create more, we get an error.
+		Also, in these tests we attempt to acquire, release and destroy locks whose values are not in specified range
+		0 to 250. We are aso giving invalid input to WaitCV, SignalCV, BroadCastCV, DestroyCV and DestroyMV commands.
+		The program holds well - and clients get BadCV, BadLock and BadMV errors.
+		
+		
+VI. Discussion:
+
+            + Experiment expectation.  
+				We expect that all the test cases run correctly - for each of Parts 1,2 and 3.
+
+            + Experiment result.  
+				The output of test cases are all as per expectations.
+
+            + Explanation
+				Demand-paged virtual memory has been correctly implemented
+				Distributed system has been correct setup.
+				
+VII. Miscellaneous:
+
+	N/A
